@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <title>Screen Mirror</title>
+  <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+  <style>
+    :root {
+      --sm-teal: #0F766E;
+      --sm-mint: #14B8A6;
+      --sm-bg: #0C1412;
+      --sm-card: rgba(22, 34, 31, 0.82);
+      --sm-text: #F4F7F6;
+      --sm-muted: #9CB5B0;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background:
+        radial-gradient(1200px 700px at 12% -8%, rgba(20, 184, 166, 0.28), transparent 55%),
+        radial-gradient(900px 600px at 108% 8%, rgba(15, 118, 110, 0.32), transparent 50%),
+        var(--sm-bg);
+      color: var(--sm-text);
+      font-family: "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    #waiting {
+      text-align: left;
+      padding: 3rem 2.5rem;
+      max-width: 720px;
+      background: var(--sm-card);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 20px;
+      box-shadow: 0 24px 80px rgba(15, 118, 110, 0.22);
+    }
+    .brand-mark {
+      width: 72px;
+      height: 72px;
+      margin: 0 0 1.25rem;
+      border-radius: 18px;
+      background: linear-gradient(135deg, var(--sm-teal), var(--sm-mint));
+      box-shadow: 0 10px 28px rgba(20, 184, 166, 0.35);
+      position: relative;
+    }
+    .brand-mark::after {
+      content: "";
+      position: absolute;
+      inset: 18px;
+      border: 3px solid #fff;
+      border-radius: 8px;
+    }
+    .eyebrow {
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: var(--sm-mint);
+      margin-bottom: 0.7rem;
+    }
+    #waiting h1 {
+      font-size: 3rem;
+      font-weight: 700;
+      margin-bottom: 0.7rem;
+      color: var(--sm-text);
+    }
+    #waiting .subtitle {
+      color: var(--sm-muted);
+      font-size: 1.2rem;
+      line-height: 1.45;
+      margin-bottom: 1.4rem;
+    }
+    #video-container {
+      display: none;
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+      position: fixed;
+      inset: 0;
+    }
+    #web-container {
+      display: none;
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+      position: fixed;
+      inset: 0;
+      z-index: 3;
+    }
+    #web-frame {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #000;
+    }
+    #web-image {
+      display: none;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+    }
+    #web-status {
+      position: fixed;
+      left: 0;
+      right: 0;
+      top: 1.25rem;
+      text-align: center;
+      color: #D1FAE5;
+      font-size: 1rem;
+      z-index: 4;
+      pointer-events: none;
+      text-shadow: 0 2px 12px rgba(0, 0, 0, 0.55);
+    }
+    #video-status {
+      position: fixed;
+      left: 50%;
+      bottom: 1.8rem;
+      transform: translateX(-50%);
+      text-align: center;
+      color: #fff;
+      font-size: 0.85rem;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      z-index: 2;
+      pointer-events: none;
+      padding: 0.45rem 0.9rem;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--sm-teal), var(--sm-mint));
+      min-width: 4.5rem;
+    }
+    #video-status:empty { display: none; }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    #status {
+      margin-top: 0.25rem;
+      color: #99F6E4;
+      font-size: 1.15rem;
+    }
+  </style>
+</head>
+<body>
+  <div id="waiting">
+    <div class="brand-mark" aria-hidden="true"></div>
+    <p class="eyebrow">Screen Mirror</p>
+    <h1>Ready on this TV</h1>
+    <p class="subtitle">Your iPhone screen, photos, videos, and websites will appear here.</p>
+    <p id="status">Open Screen Mirror on your iPhone and connect to this TV.</p>
+  </div>
+  <div id="video-container">
+    <video id="remote-video" autoplay playsinline muted></video>
+    <p id="video-status"></p>
+  </div>
+  <div id="web-container">
+    <iframe
+      id="web-frame"
+      title="Cast web page"
+      allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+      allowfullscreen
+      referrerpolicy="strict-origin-when-cross-origin"
+    ></iframe>
+    <img id="web-image" alt="Cast page snapshot" />
+    <p id="web-status"></p>
+  </div>
+
+  <script>
+    const CUSTOM_CHANNEL = 'urn:x-cast:com.example.xyz.screenMirror.signaling';
+    // Same-LAN Chromecast ↔ iPhone: host candidates only (matches iOS sender).
+    const STUN = { iceServers: [] };
+    const COPY = {
+      idle: 'Open Screen Mirror on your iPhone and connect to this TV.',
+      waitingPhone: 'Waiting for Screen Mirror on your iPhone…',
+      waitingBroadcast: 'Waiting for screen broadcast from your iPhone…',
+      readyBroadcast: 'Connected. Tap Start Mirroring on your iPhone.',
+      connecting: 'Starting screen mirror…',
+      connected: 'Mirroring live',
+      decoding: 'Connected — preparing the picture…',
+      receiving: 'Receiving stream…',
+      waitingFrame: 'Waiting for first frame…',
+      waitingVideo: 'Connected — waiting for video…',
+      reconnecting: 'Reconnecting…',
+      background: 'iPhone is in the background — mirroring continues',
+      loadingPage: 'Loading page…',
+      showingPage: 'Showing web page',
+      pageBlocked: 'This page could not be shown on the TV',
+      pageBlockedHint: 'This site blocks TV embedding. Try another page or a YouTube video.',
+      live: 'Live',
+    };
+
+    let sessionId = null;
+    let signalingHost = null;
+    let signalingPort = null;
+    let peerConnection = null;
+    let icePollTimer = null;
+    let sessionRequestTimer = null;
+    let webRtcStartInProgress = false;
+    let webRtcStarted = false;
+    let blackScreenWatchdog = null;
+    let mirrorStopRequested = false;
+    let webRtcGeneration = 0;
+
+    const context = cast.framework.CastReceiverContext.getInstance();
+    const remoteVideo = document.getElementById('remote-video');
+    const videoStatus = document.getElementById('video-status');
+    const webFrame = document.getElementById('web-frame');
+    const webImage = document.getElementById('web-image');
+    const webStatus = document.getElementById('web-status');
+    let webPageActive = false;
+
+    function showWaiting() {
+      document.getElementById('waiting').style.display = 'block';
+      document.getElementById('video-container').style.display = 'none';
+      document.getElementById('web-container').style.display = 'none';
+    }
+
+    function showVideo() {
+      if (webPageActive) return;
+      document.getElementById('waiting').style.display = 'none';
+      document.getElementById('web-container').style.display = 'none';
+      document.getElementById('video-container').style.display = 'block';
+    }
+
+    function showWebPage() {
+      document.getElementById('waiting').style.display = 'none';
+      document.getElementById('video-container').style.display = 'none';
+      document.getElementById('web-container').style.display = 'block';
+    }
+
+    function isImageURL(url) {
+      try {
+        const u = new URL(url);
+        if (u.pathname.indexOf('/media') !== -1) return true;
+        return /\.(jpe?g|png|gif|webp)$/i.test(u.pathname);
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function clearWebPage() {
+      webPageActive = false;
+      webFrame.removeAttribute('src');
+      webImage.removeAttribute('src');
+      webFrame.style.display = 'block';
+      webImage.style.display = 'none';
+      webStatus.textContent = '';
+      if (peerConnection && remoteVideo.srcObject) {
+        showVideo();
+      } else {
+        showWaiting();
+        if (sessionId) {
+          setStatus(COPY.waitingBroadcast);
+        } else {
+          setStatus(COPY.idle);
+        }
+      }
+    }
+
+    function loadWebPage(url, title) {
+      if (!url || typeof url !== 'string') return;
+      // Pause mirror WebRTC so the web surface is active.
+      stopSessionPrepareRequests();
+      resetWebRtc({ keepSession: true });
+      webPageActive = true;
+      showWebPage();
+      webStatus.textContent = title ? `Loading ${title}…` : COPY.loadingPage;
+      setStatus(title ? `Showing ${title}` : COPY.showingPage);
+
+      const showLoaded = () => {
+        webStatus.textContent = title || '';
+      };
+      const showFailed = () => {
+        webStatus.textContent = COPY.pageBlocked;
+        setStatus(COPY.pageBlockedHint);
+      };
+
+      if (isImageURL(url)) {
+        // Browser cast sends a JPEG snapshot (Google and many sites block iframes).
+        webFrame.style.display = 'none';
+        webFrame.removeAttribute('src');
+        webImage.style.display = 'block';
+        webImage.onload = showLoaded;
+        webImage.onerror = showFailed;
+        webImage.src = url;
+      } else {
+        webImage.style.display = 'none';
+        webImage.removeAttribute('src');
+        webFrame.style.display = 'block';
+        webFrame.onload = showLoaded;
+        webFrame.onerror = showFailed;
+        webFrame.src = url;
+      }
+      console.log('load_web_url', url, title);
+    }
+
+    function clearVideoElement() {
+      try { remoteVideo.pause(); } catch (e) {}
+      remoteVideo.srcObject = null;
+      remoteVideo.removeAttribute('src');
+      try { remoteVideo.load(); } catch (e) {}
+      videoStatus.textContent = '';
+    }
+
+    function stopMirrorSurface() {
+      mirrorStopRequested = true;
+      resetWebRtc({ keepSession: true, clearFrame: true });
+      showWaiting();
+      if (sessionId) {
+        setStatus(COPY.readyBroadcast);
+      } else {
+        setStatus(COPY.idle);
+      }
+      console.log('mirror_stop applied');
+    }
+
+    function resetWebRtc({ keepSession = true, clearFrame = true } = {}) {
+      webRtcGeneration += 1;
+      if (icePollTimer) {
+        clearInterval(icePollTimer);
+        icePollTimer = null;
+      }
+      if (blackScreenWatchdog) {
+        clearTimeout(blackScreenWatchdog);
+        blackScreenWatchdog = null;
+      }
+      if (peerConnection) {
+        try { peerConnection.close(); } catch (e) {}
+        peerConnection = null;
+      }
+      webRtcStarted = false;
+      webRtcStartInProgress = false;
+      if (clearFrame) {
+        clearVideoElement();
+      } else {
+        remoteVideo.srcObject = null;
+        videoStatus.textContent = '';
+      }
+      document.getElementById('video-container').style.display = 'none';
+      if (!webPageActive) {
+        document.getElementById('waiting').style.display = 'block';
+        if (keepSession && sessionId) {
+          setStatus(mirrorStopRequested
+            ? COPY.readyBroadcast
+            : COPY.waitingBroadcast);
+        } else if (!sessionId) {
+          setStatus(COPY.idle);
+        }
+      }
+    }
+
+    function attachVideoStream(stream) {
+      remoteVideo.srcObject = stream;
+      // Chromecast often skips decoding while the <video> is display:none.
+      // Show the surface immediately so frames can decode.
+      showVideo();
+      remoteVideo.muted = true;
+      try { remoteVideo.setAttribute('playsinline', 'true'); } catch (_) {}
+      try { remoteVideo.autoplay = true; } catch (_) {}
+
+      const markLive = () => {
+        setStatus(COPY.connected);
+        videoStatus.textContent = COPY.live;
+        remoteVideo.muted = false;
+        if (blackScreenWatchdog) {
+          clearTimeout(blackScreenWatchdog);
+          blackScreenWatchdog = null;
+        }
+      };
+
+      remoteVideo.onplaying = markLive;
+      remoteVideo.onloadeddata = () => {
+        if (remoteVideo.videoWidth > 0) markLive();
+      };
+      remoteVideo.onresize = () => {
+        if (remoteVideo.videoWidth > 0) markLive();
+      };
+
+      const playPromise = remoteVideo.play();
+      if (playPromise && typeof playPromise.then === 'function') {
+        playPromise.then(() => {
+          if (remoteVideo.videoWidth > 0) {
+            markLive();
+          } else {
+            setStatus(COPY.decoding);
+            videoStatus.textContent = COPY.receiving;
+          }
+        }).catch((e) => {
+          console.warn('video.play failed, retrying muted', e);
+          remoteVideo.muted = true;
+          remoteVideo.play().catch(() => {});
+        });
+      } else {
+        setStatus(COPY.decoding);
+      }
+
+      console.log(
+        'attachVideoStream tracks=',
+        stream.getTracks().map((t) => `${t.kind}:${t.readyState}:enabled=${t.enabled}:muted=${t.muted}`).join(',')
+      );
+
+      if (blackScreenWatchdog) clearTimeout(blackScreenWatchdog);
+      let playRetry = setInterval(() => {
+        if (remoteVideo.videoWidth > 0) {
+          clearInterval(playRetry);
+          return;
+        }
+        remoteVideo.muted = true;
+        remoteVideo.play().catch(() => {});
+      }, 1500);
+      blackScreenWatchdog = setTimeout(() => {
+        clearInterval(playRetry);
+        if (!remoteVideo.videoWidth) {
+          console.warn('No video frames yet', {
+            readyState: remoteVideo.readyState,
+            paused: remoteVideo.paused,
+            tracks: stream.getTracks().map((t) => t.kind + ':' + t.readyState),
+          });
+          // Soft tip only — keep trying; first broadcast can take longer for the first keyframe.
+          videoStatus.textContent = COPY.waitingFrame;
+          setStatus(COPY.waitingVideo);
+        }
+      }, 20_000);
+    }
+
+    function applySessionPrepare(data) {
+      if (!data || !data.sessionId || !data.signalingHost || !data.signalingPort) return false;
+
+      const sameSession =
+        sessionId === data.sessionId &&
+        signalingHost === data.signalingHost &&
+        signalingPort === data.signalingPort;
+
+      // Always allow a fresh WebRTC start after stop / reconnect.
+      mirrorStopRequested = false;
+
+      sessionId = data.sessionId;
+      signalingHost = data.signalingHost;
+      signalingPort = data.signalingPort;
+      stopSessionPrepareRequests();
+
+      const shouldStart = data.startMirroring === true;
+
+      if (shouldStart) {
+        // Avoid tearing down an in-flight / live peer connection for a duplicate
+        // session_prepare — the sender cannot create a second offer.
+        if (sameSession && (peerConnection || webRtcStartInProgress || webRtcStarted)) {
+          console.log('session_prepare startMirroring ignored — WebRTC already active');
+          return true;
+        }
+        // Broadcast is starting — begin WebRTC only now so we never poll a dead signaling port.
+        resetWebRtc({ keepSession: true, clearFrame: true });
+        sessionId = data.sessionId;
+        signalingHost = data.signalingHost;
+        signalingPort = data.signalingPort;
+        setStatus(COPY.connecting);
+        console.log('session_prepare startMirroring', sessionId, signalingHost, signalingPort);
+        void startWebRtc();
+        return true;
+      }
+
+      // Credentials only — wait for the user to start screen broadcast.
+      if (!sameSession) {
+        resetWebRtc({ keepSession: false, clearFrame: true });
+        sessionId = data.sessionId;
+        signalingHost = data.signalingHost;
+        signalingPort = data.signalingPort;
+      }
+      setStatus(COPY.readyBroadcast);
+      console.log('session_prepare credentials only', sessionId, signalingHost, signalingPort);
+      return true;
+    }
+
+    context.addCustomMessageListener(CUSTOM_CHANNEL, (event) => {
+      try {
+        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        if (data.type === 'session_prepare') {
+          // Do not tear down an active web/YouTube cast for mirror prepare pings.
+          if (webPageActive) {
+            console.log('ignoring session_prepare during web cast');
+            return;
+          }
+          applySessionPrepare(data);
+        } else if (data.type === 'load_web_url') {
+          loadWebPage(data.mediaURL, data.title);
+        } else if (data.type === 'clear_web_url') {
+          clearWebPage();
+        } else if (data.type === 'mirror_stop') {
+          stopMirrorSurface();
+        }
+      } catch (e) {
+        console.error('Invalid cast message', e);
+      }
+    });
+
+    function setStatus(text) {
+      document.getElementById('status').textContent = text;
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function signalingUrl(path) {
+      return `http://${signalingHost}:${signalingPort}${path}`;
+    }
+
+    async function postJson(path, body, query = '') {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1500);
+      try {
+        return await fetch(signalingUrl(path + query), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    async function getJson(path) {
+      const controller = new AbortController();
+      // Short timeout: without a listener, Chromecast TCP connect can hang 10–20s+.
+      const timer = setTimeout(() => controller.abort(), 800);
+      try {
+        const res = await fetch(signalingUrl(path), { signal: controller.signal });
+        if (res.status === 204) return null;
+        if (!res.ok) return null;
+        return await res.json();
+      } catch (e) {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    function sendCastMessage(payload) {
+      context.sendCustomMessage(CUSTOM_CHANNEL, payload);
+    }
+
+    function requestSessionPrepare() {
+      sendCastMessage({ type: 'request_session_prepare' });
+    }
+
+    function startSessionPrepareRequests() {
+      stopSessionPrepareRequests();
+      requestSessionPrepare();
+      sessionRequestTimer = setInterval(() => {
+        if (!sessionId) requestSessionPrepare();
+      }, 1500);
+    }
+
+    function stopSessionPrepareRequests() {
+      if (sessionRequestTimer) {
+        clearInterval(sessionRequestTimer);
+        sessionRequestTimer = null;
+      }
+    }
+
+    async function waitForOffer() {
+      // Poll quickly so mirroring appears almost immediately after broadcast starts.
+      for (let i = 0; i < 400; i++) {
+        if (mirrorStopRequested) throw new Error('Mirror stop requested');
+        const msg = await getJson(`/sdp/offer?sessionId=${encodeURIComponent(sessionId)}`);
+        if (msg && msg.type === 'offer' && msg.sdp) return msg.sdp;
+        await sleep(50);
+      }
+      throw new Error('Offer timeout');
+    }
+
+    async function startIcePolling() {
+      if (icePollTimer) clearInterval(icePollTimer);
+      icePollTimer = setInterval(async () => {
+        try {
+          const list = await getJson(`/ice?sessionId=${encodeURIComponent(sessionId)}&side=sender`);
+          if (!list || !list.candidates) return;
+          for (const c of list.candidates) {
+            await peerConnection.addIceCandidate({
+              candidate: c.candidate,
+              sdpMid: c.sdpMid,
+              sdpMLineIndex: c.sdpMLineIndex,
+            });
+          }
+        } catch (e) {
+          console.warn('ICE poll error', e);
+        }
+      }, 100);
+    }
+
+    async function startWebRtc() {
+      if (!sessionId || !signalingHost || !signalingPort) return;
+      if (peerConnection || webRtcStartInProgress || webRtcStarted) return;
+      if (mirrorStopRequested) return;
+
+      const generation = webRtcGeneration;
+      webRtcStartInProgress = true;
+      setStatus(COPY.waitingBroadcast);
+
+      try {
+        const offerSdp = await waitForOffer();
+        if (mirrorStopRequested || generation !== webRtcGeneration) return;
+
+        peerConnection = new RTCPeerConnection(STUN);
+        peerConnection.ontrack = (event) => {
+          if (generation !== webRtcGeneration) return;
+          if (event.track) {
+            event.track.enabled = true;
+            console.log('ontrack', event.track.kind, event.track.id, 'streams=', event.streams?.length || 0);
+          }
+          // Unified Plan sometimes delivers tracks with an empty streams array.
+          const stream = (event.streams && event.streams[0])
+            ? event.streams[0]
+            : (event.track ? new MediaStream([event.track]) : null);
+          if (!stream) return;
+          // Prefer attaching when we have a video track (or first track if stream has video).
+          const hasVideo = stream.getVideoTracks().length > 0 || event.track?.kind === 'video';
+          if (!hasVideo && remoteVideo.srcObject) return;
+          attachVideoStream(stream);
+        };
+
+        peerConnection.onconnectionstatechange = () => {
+          if (generation !== webRtcGeneration) return;
+          const state = peerConnection?.connectionState;
+          if (state === 'connected' && remoteVideo.videoWidth > 0) {
+            videoStatus.textContent = COPY.live;
+          } else if (state === 'connecting') {
+            videoStatus.textContent = COPY.connecting;
+          } else {
+            videoStatus.textContent = '';
+          }
+          if (state === 'connected') {
+            // ICE "connected" ≠ picture yet — only claim Live when frames decode.
+            if (remoteVideo.videoWidth > 0) {
+              setStatus(COPY.connected);
+            } else {
+              setStatus(COPY.waitingVideo);
+            }
+          }
+          if (state === 'disconnected') {
+            // Transient — ICE frequently recovers on its own within a few seconds.
+            // Tearing down here would force startWebRtc() to fetch the sender's one-shot
+            // offer again and POST a second answer that the extension never reads,
+            // permanently blanking the TV. Keep the peer connection and wait it out.
+            console.warn('WebRTC disconnected — waiting for ICE recovery');
+            if (!mirrorStopRequested && remoteVideo.videoWidth === 0) {
+              setStatus(COPY.reconnecting);
+            }
+            return;
+          }
+          if (state === 'failed' || state === 'closed') {
+            console.warn('WebRTC state', state);
+            // Intentional stop — clear the frozen frame and do not auto-retry.
+            if (mirrorStopRequested || state === 'closed') {
+              resetWebRtc({ keepSession: true, clearFrame: true });
+              showWaiting();
+              setStatus(sessionId
+                ? COPY.readyBroadcast
+                : COPY.idle);
+              return;
+            }
+            resetWebRtc({ keepSession: true, clearFrame: true });
+            setTimeout(() => {
+              if (sessionId && !webRtcStarted && !webRtcStartInProgress && !mirrorStopRequested) {
+                void startWebRtc();
+              }
+            }, 800);
+          }
+        };
+
+        peerConnection.onicecandidate = (event) => {
+          if (!event.candidate || generation !== webRtcGeneration) return;
+          postJson('/ice', {
+            sessionId,
+            candidate: event.candidate.candidate,
+            sdpMid: event.candidate.sdpMid,
+            sdpMLineIndex: event.candidate.sdpMLineIndex,
+          }, '?side=receiver').catch(console.error);
+        };
+
+        await peerConnection.setRemoteDescription({ type: 'offer', sdp: offerSdp });
+        if (generation !== webRtcGeneration) return;
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        if (generation !== webRtcGeneration) return;
+
+        await postJson('/sdp', {
+          sessionId,
+          type: 'answer',
+          sdp: answer.sdp,
+        });
+
+        startIcePolling();
+        webRtcStarted = true;
+      } catch (e) {
+        if (generation !== webRtcGeneration) return;
+        console.error('startWebRtc failed', e);
+        resetWebRtc({ keepSession: true, clearFrame: true });
+        if (!mirrorStopRequested) {
+          setStatus(COPY.waitingBroadcast);
+          setTimeout(() => {
+            if (sessionId && !webRtcStarted && !webRtcStartInProgress && !mirrorStopRequested) {
+              void startWebRtc();
+            }
+          }, 400);
+        }
+      } finally {
+        if (generation === webRtcGeneration) {
+          webRtcStartInProgress = false;
+        }
+      }
+    }
+
+    context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, () => {
+      setStatus(COPY.waitingPhone);
+      startSessionPrepareRequests();
+    });
+
+    if (context.getSenders().length > 0) {
+      startSessionPrepareRequests();
+    }
+
+    context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, () => {
+      if (webPageActive) {
+        // Keep showing the web page while sender briefly disconnects.
+        return;
+      }
+      if (peerConnection && remoteVideo.videoWidth > 0) {
+        // Main app may background while ReplayKit keeps streaming.
+        setStatus(COPY.background);
+        
+        return;
+      }
+      stopSessionPrepareRequests();
+      resetWebRtc({ keepSession: false });
+      sessionId = null;
+      signalingHost = null;
+      signalingPort = null;
+      setStatus(COPY.idle);
+    });
+
+    context.start({
+      disableIdleTimeout: true,
+      customNamespaces: { [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON },
+    });
+  </script>
+</body>
+</html>
