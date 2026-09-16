@@ -469,14 +469,15 @@
       const shouldStart = data.startMirroring === true;
 
       if (shouldStart) {
-        // Avoid tearing down an in-flight / live peer connection for a duplicate
-        // session_prepare — the sender cannot create a second offer.
-        if (sameSession && (peerConnection || webRtcStartInProgress || webRtcStarted)) {
-          console.log('session_prepare startMirroring ignored — WebRTC already active');
+        // Ignore only while a start is in-flight or video is already live.
+        // A hung peerConnection without frames must be allowed to restart.
+        const alreadyLive = !!(peerConnection && remoteVideo.videoWidth > 0);
+        if (sameSession && (webRtcStartInProgress || alreadyLive)) {
+          console.log('session_prepare startMirroring ignored — WebRTC already active/live');
           return true;
         }
         // Broadcast is starting — begin WebRTC only now so we never poll a dead signaling port.
-        resetWebRtc({ keepSession: true, clearFrame: true });
+        resetWebRtc({ keepSession: true, clearFrame: !alreadyLive });
         sessionId = data.sessionId;
         signalingHost = data.signalingHost;
         signalingPort = data.signalingPort;
@@ -755,10 +756,11 @@
         // Keep showing the web page while sender briefly disconnects.
         return;
       }
-      if (peerConnection && remoteVideo.videoWidth > 0) {
-        // Main app may background while ReplayKit keeps streaming.
+      // Main app force-quit / background must NOT tear down a live (or negotiating) mirror.
+      // ReplayKit continues in a separate process and WebRTC media does not need the Cast sender.
+      if (peerConnection || webRtcStarted || webRtcStartInProgress || remoteVideo.srcObject) {
         setStatus(COPY.background);
-        
+        console.log('sender disconnected — keeping mirror stream alive');
         return;
       }
       stopSessionPrepareRequests();
@@ -771,8 +773,10 @@
 
     context.start({
       disableIdleTimeout: true,
+      maxInactivity: 3600,
       customNamespaces: { [CUSTOM_CHANNEL]: cast.framework.system.MessageType.JSON },
     });
   </script>
 </body>
 </html>
+
