@@ -469,15 +469,16 @@
       const shouldStart = data.startMirroring === true;
 
       if (shouldStart) {
-        // Ignore only while a start is in-flight or video is already live.
-        // A hung peerConnection without frames must be allowed to restart.
-        const alreadyLive = !!(peerConnection && remoteVideo.videoWidth > 0);
-        if (sameSession && (webRtcStartInProgress || alreadyLive)) {
-          console.log('session_prepare startMirroring ignored — WebRTC already active/live');
+        // Never tear down an in-flight / started WebRTC for duplicate startMirroring
+        // wakes — retries from the phone were resetting the UI and causing flicker.
+        const state = peerConnection ? peerConnection.connectionState : '';
+        const failed = state === 'failed' || state === 'closed';
+        if (sameSession && !failed && (peerConnection || webRtcStartInProgress || webRtcStarted)) {
+          console.log('session_prepare startMirroring ignored — WebRTC already active');
           return true;
         }
         // Broadcast is starting — begin WebRTC only now so we never poll a dead signaling port.
-        resetWebRtc({ keepSession: true, clearFrame: !alreadyLive });
+        resetWebRtc({ keepSession: true, clearFrame: true });
         sessionId = data.sessionId;
         signalingHost = data.signalingHost;
         signalingPort = data.signalingPort;
@@ -779,4 +780,3 @@
   </script>
 </body>
 </html>
-
