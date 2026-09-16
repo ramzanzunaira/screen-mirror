@@ -263,6 +263,27 @@
       }
     }
 
+    function showCameraImage(url, title) {
+      if (!url || typeof url !== 'string') return;
+      webPageActive = true;
+      showWebPage();
+      webFrame.style.display = 'none';
+      webFrame.removeAttribute('src');
+      webImage.style.display = 'block';
+      webImage.src = url;
+      webStatus.textContent = title || COPY.live;
+      setStatus(title ? `Showing ${title}` : COPY.showingPage);
+    }
+
+    function updateCameraFrame(url) {
+      if (!url || typeof url !== 'string') return;
+      if (!webPageActive || webImage.style.display === 'none') {
+        showCameraImage(url, COPY.live);
+        return;
+      }
+      webImage.src = url;
+    }
+
     function loadWebPage(url, title) {
       if (!url || typeof url !== 'string') return;
       // Pause mirror WebRTC so the web surface is active.
@@ -489,6 +510,8 @@
           applySessionPrepare(data);
         } else if (data.type === 'load_web_url') {
           loadWebPage(data.mediaURL, data.title);
+        } else if (data.type === 'camera_frame') {
+          updateCameraFrame(data.mediaURL);
         } else if (data.type === 'clear_web_url') {
           clearWebPage();
         } else if (data.type === 'mirror_stop') {
